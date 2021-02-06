@@ -1,0 +1,153 @@
+---
+title: "Final Project"
+author: "Will Jeffcott"
+date: "02/02/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Summary
+
+In this R Markdown document I will investigate whether you can predict the manner in which exercise is carried out (classe variable) by looking at data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants. I will do this using modelling techniques learned from the course. 
+
+### Data Train/Test/Validate
+
+Let's begin by loading the data which we will be using for the analysis.
+
+```{r train-test-validate, cache=TRUE}
+train <- read.csv('./pml-training.csv')
+test <- read.csv('./pml-testing.csv')
+
+dim(train)
+```
+
+We notice from a data print out that many of the variables have sizeable numbers of NA values. We don't really want to model on a given variable if it is over 40% NAs. Let's get rid of variables according to this principle:
+
+```{r remove_NA_cols, cache=TRUE}
+#gives a vector indicating the columns which we should remove
+cols_to_remove <- sapply(train,function(x){ifelse(sum(is.na(x))>0.4*length(x),TRUE,FALSE)})
+#now create a new data frame with the cols removed
+train_rmv <- train[,!cols_to_remove]
+dim(train_rmv)
+```
+
+This process vastly reduces the number of columns from 160 to 93. Now we notice that many of the columns have blank values rather than NAs. Adopting a similar strategy, let's remove any variables from the set which are over 40% blank.
+
+```{r remove_blank_cols, cache=TRUE}
+#gives a vector indicating the columns which we should remove
+cols_to_remove <- sapply(train_rmv,function(x){ifelse(sum(x == "")>0.4*length(x),TRUE,FALSE)})
+#now create a new data frame with the cols removed
+train_rmv_2 <- train_rmv[,!cols_to_remove]
+```
+
+This cuts us down again to 60 variables. Now let's look for variables which have at least one NA or blank. We need an imputation strategy for dealing with these variables.
+
+```{r cols_with_one_NA, cache=TRUE}
+cols_with_at_least_one_NA <- sapply(train_rmv_2,
+                                    function(x){ifelse(sum(x == "" | is.na(x))>=1,TRUE,FALSE)})
+sum(cols_with_at_least_one_NA)
+```
+
+Since the resulting sum is zero we have no NAs or blanks in the dataset. Let's now also remove any factors which we expect to not be very helpful. These factors include X, user_name, raw_timestamp_part_1, raw_timestamp_part_2, cvtd_timestamp (we are not doing a time related forecast and we do not want to keep user names)
+
+```{r remove_unnecessary_cols, cache=TRUE}
+train_rmv_3 <- train_rmv_2[,!(colnames(train_rmv_2) %in% c('X',
+                                                          'user_name',
+                                                          'raw_timestamp_part_1',
+                                                          'raw_timestamp_part_2',
+                                                          'cvtd_timestamp'))]
+```
+
+### Principal Components Analysis
+
+Many of the variables in our set may be virtually the same. Principal Components Analysis will allow us to decompose the vectors into a minimal set which explains most of the deviance. Let's do this, with a threshold of 95%.
+
+```{r pca_variables, message=FALSE, cache=TRUE, warning=FALSE}
+library(caret)
+preProc <- preProcess(train_rmv_3,method="pca",thresh=0.95)
+train_pca <- predict(preProc,train_rmv_3)
+dim(train_pca)
+```
+
+As we can see from the dim command, this further lowers our number of variables to just 28. Let's train a model based on this dataset. Since we are trying to predict the 'classe' variable which has 5 levels, a decision tree might be a good place to start.
+
+### Model Building and Cross Validation
+
+## Decision Tree
+
+Let's start by building a decision tree on the 28 variables, using 10-fold cross validation. The cross validation allows us to select the average model performance out of 10 models against a validation set of 1/10th the size of the total train dataset.
+
+```{r decision_tree_cv, cache=TRUE}
+train_control<- trainControl(method="cv", number=10, savePredictions = "all")
+rpart_fit <- train(classe ~ ., data=train_pca, trControl=train_control, method="rpart")
+```
+
+Let's plot this decision tree to try and gauge what is going on:
+
+```{r decision_tree_plot, message=FALSE, warning=FALSE, cache=TRUE}
+library(rattle)
+fancyRpartPlot(rpart_fit$finalModel)
+```
+
+Let's also get a look at the accuracy of the model when predicting on the validation set.
+
+```{r decision_tree_accuracy, cache=TRUE}
+print(rpart_fit)
+```
+
+A simple print out of the model shows that our best average model accuracy was only 37%. We can do far better than this!
+
+## Random Forest
+
+Let's instead use a random forest with 5-fold cross validation. We perform this as follows:
+
+```{r random_forest, cache=TRUE}
+train_control<- trainControl(method="cv", number=5, savePredictions = "all")
+rf_fit <- train(classe ~ ., data=train_pca, trControl=train_control, method="rf")
+```
+
+Whilst we can't visualise the random forest in the same way as the decision tree, our print out shows improved accuracy for the best tuning parameters:
+
+```{r random_forest_accuracy, cache=TRUE}
+print(rf_fit)
+```
+
+With 5-fold cross validation this model has a greatly improved accuracy of 97.6% 
+
+## GBM
+
+Let's also build a GBM model to see whether we can further improve the solid accuracy from the random forest.
+
+```{r gbm, cache=TRUE, echo=FALSE, results='hide'}
+train_control <- trainControl(method="cv", number=3, savePredictions = "all")
+gbm_fit <- train(classe ~ ., data=train_pca, trControl=train_control, method="gbm")
+```
+
+Here we have used 3-fold cross validation in the interest of speed. Let's look at the accuracy of the GBM Model
+
+```{r gbm_accuracy, cache=TRUE}
+print(gbm_fit)
+```
+
+We see that the GBM has a best accuracy of 82.2%. This is worse than the Random Forest
+
+## Final Result
+
+The best model that we trained on the data is the Random Forest. We will use this for our future 20 predictions of data.
+
+We must first get the test dataset into the PCA format, and then use rf_fit to predict. Let's do this as follows:
+
+```{r test_pca, cache=TRUE}
+test_pca <- predict(preProc,test)
+test_predictions <- predict(rf_fit,test_pca)
+```
+
+Now let's print our predictions:
+
+```{r final_predictions, cache=TRUE}
+print(test_predictions)
+```
+
